@@ -1,12 +1,13 @@
 # odin-sublime-plugin
 
-Sublime Text 4 plugin providing IDE-like features for Odin. ~650 lines of Python, no dependencies beyond ST4's plugin API.
+Sublime Text 4 plugin providing IDE-like features for Odin. ~700 lines of Python, no dependencies beyond ST4's plugin API.
 
 ## What it does
 
 ### Symbol Indexer
 - Parses all `.odin` files in project folders on startup + on file save
 - Extracts: procs (with full signatures, params, return types), structs (with fields, including `using` inheritance), enums (with all variants), unions, constants, type aliases, top-level variables
+- Skips local variables inside proc bodies (tracks brace depth to distinguish top-level from local `:=` declarations)
 - Parses import statements and resolves them: `core:`, `base:`, `vendor:` collections + relative paths like `"../jui"`
 - Auto-detects Odin root per project (searches upward for `core/` + `vendor/` dirs)
 - Indexes imported stdlib/vendor packages based on actual usage (if you `import "core:math"`, it indexes `math`)
@@ -22,7 +23,7 @@ Sublime Text 4 plugin providing IDE-like features for Odin. ~650 lines of Python
 - Suppresses Sublime's built-in completions when showing contextual results
 
 ### Navigation
-- **Go to definition** (F12) — jumps to the symbol declaration with correct line and column. Shows a quick panel with previews when multiple definitions exist (e.g. overloaded names across packages).
+- **Go to definition** (F12) — jumps to the symbol declaration with correct line and column. Only searches current package and imported packages (no global fallback).
 - **Find references** (Shift+F12) — whole-word grep across all `.odin` files, results shown in a navigable output panel
 - **Hover popup** — mouse over any symbol to see its type signature, struct fields or enum variants, and source location
 - **Reindex** command in palette for manual refresh
@@ -39,15 +40,14 @@ Sublime Text 4 plugin providing IDE-like features for Odin. ~650 lines of Python
 ### Known limitations / future work
 - No type inference for `:=` local variables (would need return type resolution)
 - No struct field completion for chained method-style calls
-- No scope awareness (local vs global shadowing)
 - Struct literal field type resolution for implicit selectors (`.` inside `Struct{ field = .}`) not yet implemented
-- No semantic understanding of `when` blocks or build tags
+- Declarations inside top-level `when` blocks may not be indexed (brace depth tracker treats them as proc bodies)
 
 ## Architecture
 
 Single Python file (`odin_plugin.py`) containing:
 1. **Data classes** — `Symbol` (name, kind, signature, file, line, col, fields, variants, params, return_type, etc.) and `ImportInfo`
-2. **Parser** — line-by-line state machine with multi-line collection for structs/enums/procs. Handles block comments, `@private` attributes, `using` fields, parameterized structs, proc groups, bit_sets.
+2. **Parser** — line-by-line state machine with multi-line collection for structs/enums/procs. Tracks `proc_body_depth` to skip local `:=` inside proc bodies. Handles block comments, `@private` attributes, `using` fields, parameterized structs, proc groups, bit_sets.
 3. **Index** — thread-safe symbol store keyed by name and package directory. Import resolution, type lookup, field chain resolution, enum-for-type resolution.
 4. **Completions** — cached per-package, prefix-filtered. Dot-completion dispatches to package/struct-field/enum/implicit-enum paths.
 5. **Navigation** — goto-def with encoded position, find-refs via file scan, hover via minihtml popup.
