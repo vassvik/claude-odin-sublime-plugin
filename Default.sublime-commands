@@ -1,0 +1,5 @@
+[
+    { "caption": "Odin: Go to Definition", "command": "odin_goto_definition" },
+    { "caption": "Odin: Find References", "command": "odin_find_references" },
+    { "caption": "Odin: Reindex Project", "command": "odin_reindex" }
+]

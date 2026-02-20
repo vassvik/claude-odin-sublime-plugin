@@ -1,0 +1,16 @@
+[
+    {
+        "keys": ["f12"],
+        "command": "odin_goto_definition",
+        "context": [
+            { "key": "selector", "operand": "source.odin" }
+        ]
+    },
+    {
+        "keys": ["shift+f12"],
+        "command": "odin_find_references",
+        "context": [
+            { "key": "selector", "operand": "source.odin" }
+        ]
+    }
+]

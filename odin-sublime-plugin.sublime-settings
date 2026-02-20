@@ -1,0 +1,7 @@
+{
+    // Override Odin root path. Auto-detected by default (searches for core/ + vendor/ directories).
+    "odin_root": "",
+
+    // Extra directories to index beyond the project folders.
+    "extra_index_dirs": []
+}
