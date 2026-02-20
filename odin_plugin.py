@@ -272,6 +272,7 @@ def parse_file(filepath, content=None):
 
     in_block_comment = False
     pending_private = False
+    proc_body_depth = 0  # tracks nesting inside proc bodies (> 0 = inside proc)
     # Multi-line collection state
     collecting = None  # 'struct', 'enum', 'proc', 'union', 'skip_block'
     collect_sym = None
@@ -351,6 +352,8 @@ def parse_file(filepath, content=None):
                 collect_sym.return_type = ret
                 symbols.append(collect_sym)
                 collecting = None
+                # Count braces on the line where params close (may have `{`)
+                proc_body_depth += stripped.count('{') - stripped.count('}')
             continue
 
         if collecting in ('union', 'skip_block'):
@@ -408,15 +411,15 @@ def parse_file(filepath, content=None):
                            package_dir=pkg_dir, package_name=package_name,
                            is_private=is_priv)
 
+            started_collector = False
+
             # -- Proc group --
             if re.match(r'proc\s*\{', rest):
                 symbols.append(Symbol(name, 'proc_group',
                     signature=f'{name} :: {rest}', **base_kw))
-                continue
 
             # -- Proc --
-            pm = re.match(r'(?:#\w+\s+)?proc\s*(?:"[^"]*"\s*)?\(', rest)
-            if pm:
+            elif re.match(r'(?:#\w+\s+)?proc\s*(?:"[^"]*"\s*)?\(', rest):
                 depth = sum(1 if c == '(' else (-1 if c == ')' else 0) for c in rest)
                 sym = Symbol(name, 'proc', **base_kw)
                 if depth <= 0:
@@ -426,15 +429,14 @@ def parse_file(filepath, content=None):
                     sym.return_type = ret
                     symbols.append(sym)
                 else:
+                    started_collector = True
                     collecting = 'proc'
                     collect_sym = sym
                     collect_depth = depth
                     collect_lines = [stripped]
-                continue
 
             # -- Struct --
-            sm = re.match(r'struct\s*(?:\([^)]*\)\s*)?\{', rest)
-            if sm:
+            elif re.match(r'struct\s*(?:\([^)]*\)\s*)?\{', rest):
                 sym = Symbol(name, 'struct', **base_kw)
                 depth = rest.count('{') - rest.count('}')
                 if depth <= 0:
@@ -446,15 +448,14 @@ def parse_file(filepath, content=None):
                     sym.signature = f'{name} :: struct'
                     symbols.append(sym)
                 else:
+                    started_collector = True
                     collecting = 'struct'
                     collect_sym = sym
                     collect_depth = depth
                     collect_lines = []
-                continue
 
             # -- Enum --
-            em = re.match(r'enum\s*(?:\w+\s*)?\{', rest)
-            if em:
+            elif re.match(r'enum\s*(?:\w+\s*)?\{', rest):
                 sig_part = rest[:rest.index('{')].strip()
                 sym = Symbol(name, 'enum',
                     signature=f'{name} :: {sig_part}', **base_kw)
@@ -465,50 +466,51 @@ def parse_file(filepath, content=None):
                         sym.variants = _parse_enum_variants([body.group(1)])
                     symbols.append(sym)
                 else:
+                    started_collector = True
                     collecting = 'enum'
                     collect_sym = sym
                     collect_depth = depth
                     collect_lines = []
-                continue
 
             # -- Union --
-            if re.match(r'union\s*\{', rest):
+            elif re.match(r'union\s*\{', rest):
                 sym = Symbol(name, 'union',
                     signature=f'{name} :: union', **base_kw)
                 depth = rest.count('{') - rest.count('}')
                 if depth <= 0:
                     symbols.append(sym)
                 else:
+                    started_collector = True
                     collecting = 'union'
                     collect_sym = sym
                     collect_depth = depth
-                continue
 
             # -- bit_set --
-            bm = re.match(r'(?:distinct\s+)?bit_set\[(\w+)', rest)
-            if bm:
+            elif re.match(r'(?:distinct\s+)?bit_set\[(\w+)', rest):
+                bm = re.match(r'(?:distinct\s+)?bit_set\[(\w+)', rest)
                 symbols.append(Symbol(name, 'type',
                     signature=f'{name} :: {rest}',
                     underlying_enum=bm.group(1), **base_kw))
-                continue
 
             # -- distinct type --
-            if rest.startswith('distinct '):
+            elif rest.startswith('distinct '):
                 symbols.append(Symbol(name, 'type',
                     signature=f'{name} :: {rest}', **base_kw))
-                continue
 
             # -- #config --
-            if rest.startswith('#config('):
+            elif rest.startswith('#config('):
                 symbols.append(Symbol(name, 'const',
                     signature=f'{name} :: {rest}', **base_kw))
-                continue
 
             # -- Generic: constant, type alias, or value --
-            # Check if it looks like a type (starts with uppercase or is a known
-            # type keyword). We'll just store as 'const' generically.
-            symbols.append(Symbol(name, 'const',
-                signature=f'{name} :: {rest}', **base_kw))
+            else:
+                symbols.append(Symbol(name, 'const',
+                    signature=f'{name} :: {rest}', **base_kw))
+
+            # Count braces for proc body depth, unless a collector was started
+            # (collectors handle their own brace tracking)
+            if not started_collector:
+                proc_body_depth += stripped.count('{') - stripped.count('}')
             continue
 
         # --- Top-level variable: NAME := ... ---
@@ -518,8 +520,19 @@ def parse_file(filepath, content=None):
             is_priv = pending_private
             pending_private = False
             rest = m.group(2)
-            # If the value spans multiple lines (opens braces), skip the block
             depth = rest.count('{') - rest.count('}')
+
+            if proc_body_depth > 0:
+                # Inside a proc body — skip local variable
+                if depth > 0:
+                    collecting = 'skip_block'
+                    collect_sym = None  # don't save symbol
+                    collect_depth = depth
+                else:
+                    proc_body_depth += stripped.count('{') - stripped.count('}')
+                continue
+
+            # Top-level variable — index it
             sym = Symbol(name, 'var',
                 signature=f'{name} := ...',
                 file=filepath, line=line_num,
@@ -531,8 +544,13 @@ def parse_file(filepath, content=None):
                 collect_depth = depth
             else:
                 symbols.append(sym)
+            proc_body_depth += stripped.count('{') - stripped.count('}')
             continue
 
+        # --- No declaration matched — count braces for proc body tracking ---
+        proc_body_depth += stripped.count('{') - stripped.count('}')
+        if proc_body_depth < 0:
+            proc_body_depth = 0
         pending_private = False
 
     return package_name, symbols, imports
@@ -1490,39 +1508,8 @@ class OdinGotoDefinitionCommand(sublime_plugin.TextCommand):
                             sym = found
                             break
 
-            if not sym:
-                # Search globally — always show quick panel to confirm
-                syms = _index.get_symbols_by_name(word)
-                if len(syms) > 0:
-                    # Show quick panel with transient preview on highlight
-                    items = []
-                    for s in syms:
-                        pkg = s.package_name or os.path.basename(s.package_dir)
-                        items.append(
-                            sublime.QuickPanelItem(
-                                trigger=s.name,
-                                annotation=f'{pkg} · {os.path.basename(s.file)}:{s.line}',
-                                details=s.signature[:100],
-                            )
-                        )
-                    def on_highlight(idx):
-                        if idx >= 0:
-                            s = syms[idx]
-                            view.window().open_file(
-                                f'{s.file}:{s.line}:{s.col}',
-                                sublime.ENCODED_POSITION | sublime.TRANSIENT)
-                    def on_select(idx):
-                        if idx >= 0:
-                            s = syms[idx]
-                            view.window().open_file(
-                                f'{s.file}:{s.line}:{s.col}',
-                                sublime.ENCODED_POSITION)
-                        else:
-                            # Cancelled — go back to original file
-                            view.window().focus_view(view)
-                    view.window().show_quick_panel(
-                        items, on_select, on_highlight=on_highlight)
-                    return
+            # No global fallback — only navigate to symbols in
+            # current package or imported packages
 
         if sym:
             view.window().open_file(
